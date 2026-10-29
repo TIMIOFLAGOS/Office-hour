@@ -1,4 +1,4 @@
-# OfficeHour 🕒
+# OfficeHour 
 
 **OfficeHour** is a streamlined, web-based appointment booking platform designed specifically for individual lecturers to manage student consultations efficiently. It eliminates the friction of manual scheduling, back-and-forth emails, and missed office hours.
 
