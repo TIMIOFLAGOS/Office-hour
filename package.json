@@ -1,0 +1,23 @@
+{
+  "name": "lecturer-appointment-booking",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n API,WEB -c green,cyan \"npm:dev:server\" \"npm:dev:frontend\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "lint": "npm --prefix frontend run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "dependencies": {
+    "node-cron": "^4.6.0",
+    "supertest": "^7.3.1"
+  },
+  "overrides": {
+    "shell-quote": "^1.12.0"
+  }
+}

@@ -1,0 +1,6 @@
+- Keep the project focused on a single-lecturer appointment booking workflow.
+- Use React + Vite for the frontend and Node.js + Express + SQLite for the backend.
+- Treat the frontend as a student-facing booking app and lecturer dashboard.
+- Keep the API RESTful and validate slot and booking inputs on the server.
+- Prefer simple, maintainable code and explainable project structure.
+- Run project verification before claiming completion.
