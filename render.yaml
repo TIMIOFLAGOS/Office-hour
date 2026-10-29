@@ -1,7 +1,9 @@
+
 services:
+  # Backend API
   - type: web
     name: office-hours-api
-    env: node
+    runtime: node
     rootDir: .
     buildCommand: npm install --prefix server
     startCommand: npm --prefix server run start
@@ -23,7 +25,7 @@ services:
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT
-        value: 587
+        value: "587"
       - key: SMTP_USER
         sync: false
       - key: SMTP_PASS
@@ -31,8 +33,10 @@ services:
       - key: SMTP_FROM
         sync: false
 
-  - type: static
+  # Frontend static site
+  - type: web
     name: office-hours-web
+    runtime: static
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
@@ -43,7 +47,7 @@ services:
     headers:
       - path: /*
         name: Content-Security-Policy
-        value: "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https: http://localhost:3001; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+        value: "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
       - path: /*
         name: Referrer-Policy
         value: strict-origin-when-cross-origin
@@ -61,5 +65,4 @@ services:
         value: max-age=63072000; includeSubDomains; preload
     envVars:
       - key: VITE_API_URL
-        value: https://your-api-url.onrender.com/api
-        sync: false
+        value: https://YOUR-ACTUAL-API.onrender.com/api
