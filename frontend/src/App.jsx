@@ -1375,6 +1375,7 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
           <div className="panel-header">
             <h2>Waitlist</h2>
           </div>
+          
 
           {waitlist.length ? (
             <div className="list-stack">
@@ -1385,6 +1386,8 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
                     <small>{entry.email}</small>
                     <small>{entry.urgency === 'urgent' ? 'Urgent' : 'Standard'}</small>
                   </div>
+
+                  
                   <div className="meta-block">
                     <strong>{prettyDate(entry.date, { weekday: 'short', month: 'short', day: 'numeric' })}</strong>
                   </div>
