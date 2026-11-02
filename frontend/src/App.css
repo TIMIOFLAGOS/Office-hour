@@ -20,7 +20,7 @@ html, body, #root {
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: 'Roboto', sans-serif;
+  font-family: 'DM Sans', sans-serif;
 }
 
 button, input, textarea, select {
@@ -1290,3 +1290,255 @@ select:user-invalid {
 .notice-close:hover { background: #333; }
 
 @keyframes notice-pop { from { opacity: 0; transform: scale(0.88) translateY(8px); } to { opacity: 1; transform: none; } }
+
+.brand-logo {
+  display: block;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+}
+
+/* ---------- Progress steps ---------- */
+.steps {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 0 20px;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 6px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #d8d8d8;
+  font-size: 0.85rem;
+  color: #6b6b6b;
+}
+
+.step-dot {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #e8e8e8;
+  color: #444;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.step-current {
+  border-color: #000;
+  color: #000;
+  font-weight: 700;
+}
+
+.step-current .step-dot,
+.step-done .step-dot {
+  background: #000;
+  color: #fff;
+}
+
+.step-done {
+  color: #000;
+}
+
+@media (max-width: 520px) {
+  .steps { gap: 4px; }
+  .step { padding: 4px 8px 4px 4px; font-size: 0.75rem; gap: 6px; }
+  .step-dot { width: 20px; height: 20px; }
+}
+
+/* ---------- Your appointment ---------- */
+.my-appointment-card {
+  display: grid;
+  gap: 6px;
+  padding: 18px;
+  margin: 12px 0;
+  border: 2px solid #000;
+  border-radius: 18px;
+  background: #fff;
+}
+
+.my-appointment-card strong { font-size: 1.1rem; }
+.my-appointment-card span,
+.my-appointment-card small { color: #444; }
+
+.my-appointment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.my-appointment-card > .secondary-button { justify-self: start; margin-top: 8px; }
+
+/* ---------- Dark mode ---------- */
+html[data-theme='dark'] {
+  filter: invert(1) hue-rotate(180deg);
+  background: #fff;
+}
+
+html[data-theme='dark'] img,
+html[data-theme='dark'] video {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+html[data-theme='dark'] .notice-backdrop,
+html[data-theme='dark'] .modal-backdrop {
+  background: rgba(255, 255, 255, 0.55);
+}
+
+html[data-theme='dark'] .notice-card,
+html[data-theme='dark'] .booking-modal {
+  box-shadow: 0 24px 60px rgba(255, 255, 255, 0.2);
+}
+
+.theme-toggle {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1.5px solid #000;
+  border-radius: 50%;
+  background: #fff;
+  color: #000;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  background: #000;
+  color: #fff;
+}
+
+/* Pages without a header get a toggle in the top-right corner instead */
+.theme-floating {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 150;
+}
+
+body:has(.topbar) .theme-floating {
+  display: none;
+}
+
+/* ---------- Lecturer: week calendar, search, attendance ---------- */
+.week-scroll {
+  overflow-x: auto;
+  margin: 8px -4px 0;
+  padding: 0 4px 6px;
+}
+
+.week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(112px, 1fr));
+  gap: 8px;
+  min-width: 800px;
+}
+
+.week-day {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 160px;
+  padding: 8px;
+  border: 1px solid #d8d8d8;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.week-day.is-today {
+  border: 2px solid #000;
+}
+
+.week-day-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: #5d5d5d;
+}
+
+.week-day-head strong {
+  font-size: 1.1rem;
+  color: #000;
+}
+
+.week-slot {
+  display: grid;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.week-slot small,
+.week-slot em {
+  font-size: 0.72rem;
+  font-style: normal;
+}
+
+.week-slot.is-booked {
+  background: #000;
+  color: #fff;
+}
+
+.week-slot.is-open {
+  border: 1.5px solid #000;
+  background: #fff;
+  color: #000;
+}
+
+.week-slot.is-past {
+  opacity: 0.45;
+}
+
+.week-empty {
+  margin-top: 6px;
+  font-size: 0.75rem;
+  color: #8a8a8a;
+}
+
+.list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.search-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 12px 16px;
+  border: 1.5px solid #d8d8d8;
+  border-radius: 999px;
+  background: #fff;
+  color: #000;
+}
+
+.search-input:focus {
+  border-color: #000;
+  outline: none;
+}
+
+.history-tag.attendance-attended {
+  background: #000;
+  color: #fff;
+}
+
+.history-tag.attendance-no_show {
+  background: #fff;
+  color: #000;
+  border: 1.5px solid #000;
+}

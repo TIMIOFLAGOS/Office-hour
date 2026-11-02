@@ -1,5 +1,6 @@
-﻿import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { Component, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import BookingModal from './BookingModal.jsx'
+import logo from './assets/logo.svg'
 import './App.css'
 
 const API = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')
@@ -87,6 +88,70 @@ function Notice({ message, onClose }) {
   )
 }
 
+const THEME_KEY = 'office-hours-theme'
+const themeListeners = new Set()
+let currentTheme = null
+
+const initialTheme = () => {
+  try {
+    const saved = localStorage.getItem(THEME_KEY)
+    if (saved === 'dark' || saved === 'light') return saved
+  } catch {
+    /* ignore unreadable settings */
+  }
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+const getTheme = () => {
+  if (!currentTheme) {
+    currentTheme = initialTheme()
+    document.documentElement.dataset.theme = currentTheme
+  }
+  return currentTheme
+}
+
+const setTheme = (theme) => {
+  currentTheme = theme
+  document.documentElement.dataset.theme = theme
+  try {
+    localStorage.setItem(THEME_KEY, theme)
+  } catch {
+    /* storage unavailable: the choice lasts for this visit only */
+  }
+  themeListeners.forEach((listener) => listener())
+}
+
+const subscribeTheme = (listener) => {
+  themeListeners.add(listener)
+  return () => themeListeners.delete(listener)
+}
+
+function ThemeToggle({ floating = false }) {
+  const theme = useSyncExternalStore(subscribeTheme, getTheme)
+  const dark = theme === 'dark'
+
+  return (
+    <button
+      type="button"
+      className={`theme-toggle ${floating ? 'theme-floating' : ''}`}
+      aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      title={dark ? 'Light mode' : 'Dark mode'}
+      onClick={() => setTheme(dark ? 'light' : 'dark')}
+    >
+      {dark ? (
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+        </svg>
+      )}
+    </button>
+  )
+}
+
 function Spinner({ size = 16 }) {
   return <span className="spinner" style={{ width: size, height: size }} aria-hidden="true" />
 }
@@ -114,6 +179,24 @@ function SlowHint({ active }) {
   )
 }
 
+function Steps({ current }) {
+  const steps = ['Your details', 'Verify email', 'Pick a time']
+  return (
+    <ol className="steps" aria-label="Booking progress">
+      {steps.map((label, index) => {
+        const number = index + 1
+        const state = number < current ? 'done' : number === current ? 'current' : 'todo'
+        return (
+          <li key={label} className={`step step-${state}`} aria-current={state === 'current' ? 'step' : undefined}>
+            <span className="step-dot">{state === 'done' ? '✓' : number}</span>
+            <span className="step-label">{label}</span>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
 function SlotSkeleton() {
   return (
     <>
@@ -122,7 +205,7 @@ function SlotSkeleton() {
   )
 }
 
-function App() {
+function AppRoutes() {
   const [auth, setAuth] = useState(() => {
     try {
       const stored = sessionStorage.getItem('office-hours-auth')
@@ -277,6 +360,24 @@ function StudentPage({ auth, setAuth, navigate }) {
   const [waitlistBusy, setWaitlistBusy] = useState(false)
   const [otpState, setOtpState] = useState(() => (restored?.otpState ? { ...EMPTY_OTP, ...restored.otpState } : EMPTY_OTP))
   const [verifiedUntil, setVerifiedUntil] = useState(() => restored?.expiresAt || 0)
+  const [myBookings, setMyBookings] = useState(null)
+  const [resendAt, setResendAt] = useState(0)
+  const [clockNow, setClockNow] = useState(() => Date.now())
+  const [cancelAsk, setCancelAsk] = useState('')
+  const [cancelBusy, setCancelBusy] = useState(false)
+
+  useEffect(() => {
+    if (resendAt <= Date.now()) return undefined
+    const timer = window.setInterval(() => {
+      const current = Date.now()
+      setClockNow(current)
+      if (current >= resendAt) window.clearInterval(timer)
+    }, 500)
+    return () => window.clearInterval(timer)
+  }, [resendAt])
+
+  const resendSeconds = Math.max(0, Math.ceil((resendAt - clockNow) / 1000))
+  const resendWaiting = otpState.sent && resendSeconds > 0
 
   // Keep a verified student verified across page refreshes (until the server-side verification expires).
   useEffect(() => {
@@ -402,6 +503,8 @@ function StudentPage({ auth, setAuth, navigate }) {
         verifying: false,
       })
 
+      setClockNow(Date.now())
+      setResendAt(Date.now() + 30000)
       setMessage(data.message || 'Verification email sent. Check your inbox and spam folder.')
     } catch (error) {
       setOtpState((current) => ({ ...current, sending: false }))
@@ -546,6 +649,64 @@ function StudentPage({ auth, setAuth, navigate }) {
     }
   }
 
+  useEffect(() => {
+    if (!otpState.verified || !otpState.email || !otpState.otp || confirmation) {
+      setMyBookings(null)
+      return undefined
+    }
+
+    let ignore = false
+    const loadMine = async () => {
+      try {
+        const response = await fetch(`${API}/bookings/mine`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: otpState.email, otp: otpState.otp }),
+        })
+        const data = await response.json()
+        if (ignore) return
+        if (response.status === 401) {
+          setOtpState(EMPTY_OTP)
+          setVerifiedUntil(0)
+          setMessage('Your verification expired. Please verify your email again.')
+          return
+        }
+        if (!response.ok) throw new Error(data.error || 'Could not load your appointment.')
+        setMyBookings(data.bookings)
+      } catch (error) {
+        if (!ignore) {
+          setMyBookings([])
+          setMessage(errorText(error, 'Could not load your appointment.'))
+        }
+      }
+    }
+
+    void loadMine()
+    return () => { ignore = true }
+  }, [otpState.verified, otpState.email, otpState.otp, confirmation])
+
+  const cancelMyBooking = async (slotId) => {
+    setCancelBusy(true)
+    try {
+      const response = await fetch(`${API}/bookings/mine/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: otpState.email, otp: otpState.otp, slotId }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Could not cancel your appointment.')
+      setMyBookings((current) => (current || []).filter((booking) => booking.id !== slotId))
+      setCancelAsk('')
+      setMessage(data.message || 'Your appointment has been cancelled.')
+      await refreshSlots()
+      await refreshStats()
+    } catch (error) {
+      setMessage(errorText(error, 'Could not cancel your appointment.'))
+    } finally {
+      setCancelBusy(false)
+    }
+  }
+
   const handleLogout = async () => {
     if (auth?.token) {
       await fetch(`${API}/logout`, {
@@ -561,7 +722,7 @@ function StudentPage({ auth, setAuth, navigate }) {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand-block">
-          <div className="brand-mark">C</div>
+          <img className="brand-logo" src={logo} alt="" width="36" height="36" />
           <div>
             <div className="eyebrow">Book An Appointment </div>
             <strong>With Mrs Charity</strong>
@@ -570,10 +731,12 @@ function StudentPage({ auth, setAuth, navigate }) {
 
         <div className="header-actions">
           {auth?.token && <button className="ghost-button" type="button" onClick={handleLogout}>Log out</button>}
+          <ThemeToggle />
         </div>
       </header>
 
       <main className="page-wrap auth-layout">
+        {!confirmation && <Steps current={otpState.verified ? 3 : otpState.sent ? 2 : 1} />}
         {confirmation ? (
           <section className="login-card confirm-card">
             <div className="eyebrow">Appointment confirmed</div>
@@ -640,8 +803,8 @@ function StudentPage({ auth, setAuth, navigate }) {
                 }} placeholder="name@email.com" {...requiredProps} />
               </label>
 
-              <button type="submit" className={`secondary-button full-width ${otpState.sending ? 'is-loading' : ''}`} disabled={otpState.sending} aria-busy={otpState.sending}>
-                <BtnLabel loading={otpState.sending} loadingText="Sending code…">{otpState.sent ? 'Resend OTP' : 'Send OTP'}</BtnLabel>
+              <button type="submit" className={`secondary-button full-width ${otpState.sending ? 'is-loading' : ''}`} disabled={otpState.sending || resendWaiting} aria-busy={otpState.sending}>
+                <BtnLabel loading={otpState.sending} loadingText="Sending code…">{resendWaiting ? `Resend in ${resendSeconds}s` : otpState.sent ? 'Resend OTP' : 'Send OTP'}</BtnLabel>
               </button>
               <SlowHint active={otpState.sending} />
             </form>
@@ -671,7 +834,41 @@ function StudentPage({ auth, setAuth, navigate }) {
           </section>
         ) : null}
 
-        {otpState.verified && !confirmation && (
+        {otpState.verified && !confirmation && myBookings === null && (
+          <section className="calendar-panel">
+            <div className="loading-hint" role="status"><Spinner size={14} /><span>Checking your appointments…</span></div>
+          </section>
+        )}
+
+        {otpState.verified && !confirmation && myBookings?.length > 0 && (
+          <section className="calendar-panel my-appointment">
+            <div className="panel-header">
+              <h2>Your appointment</h2>
+              <span>1 booked</span>
+            </div>
+            {myBookings.map((booking) => (
+              <div className="my-appointment-card" key={booking.id}>
+                <strong>{prettyDate(booking.date, { weekday: 'long', month: 'long', day: 'numeric' })}</strong>
+                <span>{clock(booking.time)} · {booking.duration || 30} minutes</span>
+                {booking.topic && <small>Reason: {booking.topic}</small>}
+                {cancelAsk === booking.id ? (
+                  <div className="my-appointment-actions">
+                    <small>Cancel this appointment?</small>
+                    <button className={`primary-button ${cancelBusy ? 'is-loading' : ''}`} type="button" disabled={cancelBusy} onClick={() => cancelMyBooking(booking.id)}>
+                      <BtnLabel loading={cancelBusy} loadingText="Cancelling…">Yes, cancel it</BtnLabel>
+                    </button>
+                    <button className="secondary-button" type="button" disabled={cancelBusy} onClick={() => setCancelAsk('')}>Keep it</button>
+                  </div>
+                ) : (
+                  <button className="secondary-button" type="button" onClick={() => setCancelAsk(booking.id)}>Cancel appointment</button>
+                )}
+              </div>
+            ))}
+            <p className="helper-text">You can hold one appointment at a time. Cancel it if you need a different time.</p>
+          </section>
+        )}
+
+        {otpState.verified && !confirmation && myBookings?.length === 0 && (
           <section className="calendar-panel">
             <div className="panel-header">
               <h2>Available times</h2>
@@ -965,6 +1162,92 @@ function LecturerAccess({ onAuthenticated, navigate }) {
   )
 }
 
+const csvCell = (value) => {
+  let text = String(value ?? '')
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`
+  return `"${text.replace(/"/g, '""')}"`
+}
+
+const ATTENDANCE_LABELS = { attended: 'Attended', no_show: 'No-show' }
+
+const downloadBookingsCsv = (rows) => {
+  const header = ['Student', 'Email', 'Matric number', 'Level', 'Department', 'Date', 'Time', 'Reason', 'Attendance']
+  const lines = [header, ...rows.map((row) => [row.student, row.email, row.matric_no, row.level, row.department, row.date, row.time, row.topic, ATTENDANCE_LABELS[row.attendance] || ''])]
+  const blob = new Blob([`\ufeff${lines.map((line) => line.map(csvCell).join(',')).join('\r\n')}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `appointments-${formatDateKey(new Date())}.csv`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function WeekCalendar({ slots, weekOffset, setWeekOffset }) {
+  const days = useMemo(() => {
+    const start = new Date()
+    start.setHours(0, 0, 0, 0)
+    start.setDate(start.getDate() - ((start.getDay() + 6) % 7) + weekOffset * 7)
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(start)
+      date.setDate(start.getDate() + index)
+      return { date, key: formatDateKey(date) }
+    })
+  }, [weekOffset])
+
+  const todayKey = formatDateKey(new Date())
+  const nowMs = Date.now()
+  const rangeLabel = `${prettyDate(days[0].key, { month: 'short', day: 'numeric' })} – ${prettyDate(days[6].key, { month: 'short', day: 'numeric', year: 'numeric' })}`
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <h2>Week calendar</h2>
+        <span>{rangeLabel}</span>
+      </div>
+
+      <div className="calendar-navigation">
+        <button className="secondary-button" type="button" onClick={() => setWeekOffset(weekOffset - 1)}>Previous week</button>
+        <button className="ghost-button" type="button" disabled={weekOffset === 0} onClick={() => setWeekOffset(0)}>This week</button>
+        <button className="secondary-button" type="button" onClick={() => setWeekOffset(weekOffset + 1)}>Next week</button>
+      </div>
+
+      <div className="week-scroll">
+        <div className="week-grid">
+          {days.map(({ date, key }) => {
+            const daySlots = slots.filter((slot) => slot.date === key).sort((a, b) => a.time.localeCompare(b.time))
+            return (
+              <div className={`week-day ${key === todayKey ? 'is-today' : ''}`} key={key}>
+                <div className="week-day-head">
+                  <span>{date.toLocaleDateString('en', { weekday: 'short' })}</span>
+                  <strong>{date.getDate()}</strong>
+                </div>
+                {daySlots.length ? daySlots.map((slot) => {
+                  const past = new Date(`${slot.date}T${slot.time}`).getTime() < nowMs
+                  const booked = slot.status === 'booked'
+                  return (
+                    <div
+                      className={`week-slot ${booked ? 'is-booked' : 'is-open'} ${past ? 'is-past' : ''}`}
+                      key={slot.id}
+                      title={booked ? `${slot.student || 'Booked'} · ${slot.topic || 'No reason given'}` : 'Open slot'}
+                    >
+                      <span>{clock(slot.time)}</span>
+                      <small>{booked ? slot.student || 'Booked' : 'Open'}</small>
+                      {slot.attendance && <em>{slot.attendance === 'attended' ? '✓ Attended' : '✕ No-show'}</em>}
+                    </div>
+                  )
+                }) : <div className="week-empty">No slots</div>}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+      <p className="helper-text">Black = booked, outlined = open, faded = already passed.</p>
+    </section>
+  )
+}
+
 function LecturerDashboard({ auth, setAuth, navigate }) {
   const [slots, setSlots] = useState([])
   const [bookings, setBookings] = useState([])
@@ -976,6 +1259,10 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
   const [busy, setBusy] = useState(false)
   const [noticeBusy, setNoticeBusy] = useState('')
   const [dashLoading, setDashLoading] = useState(true)
+  const [allBookings, setAllBookings] = useState([])
+  const [studentSearch, setStudentSearch] = useState('')
+  const [weekOffset, setWeekOffset] = useState(0)
+  const [attendanceBusy, setAttendanceBusy] = useState('')
   const [newSlot, setNewSlot] = useState({ date: getBookingDays()[0].key, time: '', duration: '30', isEmergency: false })
 
   const handleUnauthorized = useCallback((response) => {
@@ -989,16 +1276,17 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
     if (!auth?.token) return
 
     try {
-      const [slotsRes, bookingsRes, waitlistRes, statsRes, analyticsRes, historyRes] = await Promise.all([
+      const [slotsRes, bookingsRes, waitlistRes, statsRes, analyticsRes, historyRes, allRes] = await Promise.all([
         fetch(`${API}/slots/manage`, { headers: { Authorization: `Bearer ${auth.token}` } }),
         fetch(`${API}/bookings`, { headers: { Authorization: `Bearer ${auth.token}` } }),
         fetch(`${API}/waitlist`, { headers: { Authorization: `Bearer ${auth.token}` } }),
         fetch(`${API}/stats`),
         fetch(`${API}/analytics`, { headers: { Authorization: `Bearer ${auth.token}` } }),
         fetch(`${API}/bookings/history`, { headers: { Authorization: `Bearer ${auth.token}` } }),
+        fetch(`${API}/bookings/all`, { headers: { Authorization: `Bearer ${auth.token}` } }),
       ])
 
-      if ([slotsRes, bookingsRes, waitlistRes, analyticsRes, historyRes].some((response) => handleUnauthorized(response))) return
+      if ([slotsRes, bookingsRes, waitlistRes, analyticsRes, historyRes, allRes].some((response) => handleUnauthorized(response))) return
 
       if (slotsRes.ok) setSlots(await slotsRes.json())
       if (bookingsRes.ok) setBookings(await bookingsRes.json())
@@ -1006,6 +1294,7 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
       if (statsRes.ok) setStats(await statsRes.json())
       if (analyticsRes.ok) setAnalytics(await analyticsRes.json())
       if (historyRes.ok) setHistory(await historyRes.json())
+      if (allRes.ok) setAllBookings(await allRes.json())
     } catch {
       setMessage('Could not refresh lecturer data.')
     } finally {
@@ -1139,6 +1428,40 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
     }
   }
 
+  const markAttendance = async (slotId, status) => {
+    if (!auth?.token) return
+    setAttendanceBusy(`${slotId}:${status}`)
+
+    try {
+      const response = await fetch(`${API}/bookings/${slotId}/attendance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
+        body: JSON.stringify({ status }),
+      })
+      if (handleUnauthorized(response)) return
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Could not save attendance.')
+
+      const patch = (list) => list.map((item) => (item.id === slotId ? { ...item, attendance: data.attendance } : item))
+      setSlots(patch)
+      setBookings(patch)
+      setHistory(patch)
+      setAllBookings(patch)
+      setMessage(status === 'attended' ? 'Marked as attended.' : status === 'no_show' ? 'Marked as no-show.' : 'Attendance cleared.')
+    } catch (error) {
+      setMessage(errorText(error, 'Could not save attendance.'))
+    } finally {
+      setAttendanceBusy('')
+    }
+  }
+
+  const filteredStudents = useMemo(() => {
+    const query = studentSearch.trim().toLowerCase()
+    if (!query) return allBookings
+    return allBookings.filter((row) => [row.student, row.email, row.matric_no, row.level, row.department, row.topic]
+      .some((value) => String(value || '').toLowerCase().includes(query)))
+  }, [allBookings, studentSearch])
+
   const sendAttendanceNotice = async (recipientType, recipientId, shouldAttend) => {
     if (!auth?.token) return
     const requestKey = `${recipientType}:${recipientId}:${shouldAttend}`
@@ -1175,7 +1498,7 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
       {dashLoading && <div className="top-loader" role="progressbar" aria-label="Loading dashboard" />}
       <header className="topbar">
         <div className="brand-block">
-          <div className="brand-mark">O</div>
+          <img className="brand-logo" src={logo} alt="" width="36" height="36" />
           <div>
             <div className="eyebrow">Lecturer</div>
             <strong>Dashboard</strong>
@@ -1185,6 +1508,7 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
         <div className="header-actions">
           <button className="link-button" type="button" onClick={() => navigate('/')}>Student view</button>
           <button className="ghost-button" type="button" onClick={handleLogout}>Log out</button>
+          <ThemeToggle />
         </div>
       </header>
 
@@ -1281,6 +1605,8 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
           </form>
         </section>
 
+        <WeekCalendar slots={slots} weekOffset={weekOffset} setWeekOffset={setWeekOffset} />
+
         <section className="panel">
           <div className="panel-header">
             <h2>Scheduled slots</h2>
@@ -1345,6 +1671,64 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
 
         <section className="panel">
           <div className="panel-header">
+            <h2>Student list</h2>
+            <span>{filteredStudents.length} of {allBookings.length}</span>
+          </div>
+
+          <div className="list-toolbar">
+            <input
+              type="search"
+              className="search-input"
+              aria-label="Search students"
+              placeholder="Search name, matric, email or department"
+              value={studentSearch}
+              onChange={(event) => setStudentSearch(event.target.value)}
+            />
+            <button className="secondary-button" type="button" disabled={!filteredStudents.length} onClick={() => downloadBookingsCsv(filteredStudents)}>Download CSV</button>
+          </div>
+
+          {filteredStudents.length ? (
+            <div className="list-stack">
+              {filteredStudents.map((slot) => (
+                <div className="list-item" key={`${slot.id}-student`}>
+                  <div>
+                    <strong>{slot.student}</strong>
+                    <small>{slot.email}</small>
+                    {slot.matric_no && <small>Matric: {slot.matric_no}</small>}
+                    {(slot.level || slot.department) && <small>{[slot.level, slot.department].filter(Boolean).join(' · ')}</small>}
+                    <small>{slot.topic || 'No topic provided'}</small>
+                  </div>
+                  <div className="meta-block">
+                    <strong>{prettyDate(slot.date, { weekday: 'short', month: 'short', day: 'numeric' })}</strong>
+                    <small>{clock(slot.time)}</small>
+                  </div>
+                  <div className="attendance-actions">
+                    {slot.attendance && <span className={`history-tag attendance-${slot.attendance}`}>{ATTENDANCE_LABELS[slot.attendance]}</span>}
+                    {slot.date <= formatDateKey(new Date()) && (slot.attendance ? (
+                      <button className="ghost-button" type="button" disabled={attendanceBusy !== ''} onClick={() => markAttendance(slot.id, 'clear')}>
+                        <BtnLabel loading={attendanceBusy === `${slot.id}:clear`} loadingText="Saving…">Undo</BtnLabel>
+                      </button>
+                    ) : (
+                      <>
+                        <button className="ghost-button" type="button" disabled={attendanceBusy !== ''} onClick={() => markAttendance(slot.id, 'attended')}>
+                          <BtnLabel loading={attendanceBusy === `${slot.id}:attended`} loadingText="Saving…">Mark attended</BtnLabel>
+                        </button>
+                        <button className="ghost-button" type="button" disabled={attendanceBusy !== ''} onClick={() => markAttendance(slot.id, 'no_show')}>
+                          <BtnLabel loading={attendanceBusy === `${slot.id}:no_show`} loadingText="Saving…">No-show</BtnLabel>
+                        </button>
+                      </>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-list">{allBookings.length ? 'No students match your search.' : 'No students have booked yet.'}</div>
+          )}
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
             <h2>Recent history</h2>
           </div>
 
@@ -1362,7 +1746,7 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
                     <strong>{prettyDate(slot.date, { weekday: 'short', month: 'short', day: 'numeric' })}</strong>
                     <small>{clock(slot.time)}</small>
                   </div>
-                  <span className="history-tag">Booked</span>
+                  <span className={`history-tag ${slot.attendance ? `attendance-${slot.attendance}` : ''}`}>{ATTENDANCE_LABELS[slot.attendance] || 'Booked'}</span>
                 </div>
               ))}
             </div>
@@ -1375,7 +1759,6 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
           <div className="panel-header">
             <h2>Waitlist</h2>
           </div>
-          
 
           {waitlist.length ? (
             <div className="list-stack">
@@ -1386,8 +1769,6 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
                     <small>{entry.email}</small>
                     <small>{entry.urgency === 'urgent' ? 'Urgent' : 'Standard'}</small>
                   </div>
-
-                  
                   <div className="meta-block">
                     <strong>{prettyDate(entry.date, { weekday: 'short', month: 'short', day: 'numeric' })}</strong>
                   </div>
@@ -1413,6 +1794,15 @@ function LecturerDashboard({ auth, setAuth, navigate }) {
 <Notice message={message} onClose={() => setMessage('')} />
       )}
     </div>
+  )
+}
+
+function App() {
+  return (
+    <>
+      <AppRoutes />
+      <ThemeToggle floating />
+    </>
   )
 }
 

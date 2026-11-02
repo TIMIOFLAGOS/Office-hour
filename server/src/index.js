@@ -21,7 +21,7 @@ const appointmentTimeZone = process.env.APPOINTMENT_TIME_ZONE || 'UTC'
 try {
   new Intl.DateTimeFormat('en-US', { timeZone: appointmentTimeZone })
 } catch {
-  throw new Error('APPOINTMENTb _TIME_ZONE must be a valid IANA timezone, such as Europe/London.')
+  throw new Error('APPOINTMENT_TIME_ZONE must be a valid IANA timezone, such as Europe/London.')
 }
 process.env.TZ = appointmentTimeZone
 const databaseFile = process.env.APPOINTMENTS_DB_PATH || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../appointments.db')
@@ -181,6 +181,7 @@ for (const [column, definition] of [
   ['department', 'TEXT'],
   ['is_emergency', 'INTEGER NOT NULL DEFAULT 0'],
   ['last_reminder_at', 'TEXT'],
+  ['attendance', 'TEXT'],
 ]) {
   if (!slotColumns.has(column)) db.exec(`ALTER TABLE slots ADD COLUMN ${column} ${definition}`)
 }
@@ -405,6 +406,16 @@ async function sendReminderEmail({ student, email, topic, date, time }) {
   return info
 }
 
+async function sendStudentCancellationEmail({ student, email, matricNo, date, time }) {
+  const transporter = createMailTransport()
+  return transporter.sendMail({
+    from: getMailFrom(),
+    to: LECTURER.email,
+    subject: 'Appointment cancelled by student',
+    text: `A student cancelled their appointment.\n\nStudent: ${student}\nMatric number: ${matricNo}\nEmail: ${email}\nDate: ${date}\nTime: ${time}\n\nThe time is open for booking again.`,
+  })
+}
+
 async function sendWaitlistNotificationEmail({ student, email, date, time }) {
   const transporter = createMailTransport()
 
@@ -492,6 +503,13 @@ const otpVerifyRateLimit = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: { error: 'Too many verification attempts. Request a new code later.' },
+})
+const lookupRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: process.env.NODE_ENV === 'test' ? 200 : 40,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please try again in 15 minutes.' },
 })
 const sensitiveActionRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -881,11 +899,93 @@ app.post('/api/bookings', sensitiveActionRateLimit, async (req, res) => {
     emailDelivery,
   })
 })
+function checkVerifiedStudent(emailInput, otpInput) {
+  const email = normalizeEmail(emailInput)
+  const otp = typeof otpInput === 'string' ? otpInput.trim() : ''
+  if (!email || email.length > 254 || !/^\S+@\S+\.\S+$/.test(email)) {
+    return { status: 400, error: 'Enter a valid email address.' }
+  }
+  const record = db.prepare('SELECT * FROM email_otps WHERE email = ?').get(email)
+  if (!record || record.expires_at < Date.now() || !record.verified) {
+    return { status: 401, error: 'Verify your email first.' }
+  }
+  if (!/^\d{6}$/.test(otp) || hashOtp(otp, record.salt) !== record.code_hash) {
+    return { status: 401, error: 'The OTP does not match the verified email.' }
+  }
+  return { email }
+}
+
+app.post('/api/bookings/mine', lookupRateLimit, (req, res) => {
+  const check = checkVerifiedStudent(req.body?.email, req.body?.otp)
+  if (check.error) return res.status(check.status).json({ error: check.error })
+
+  const key = canonicalEmail(check.email)
+  const bookings = db.prepare("SELECT id, date, time, duration, topic, student, matric_no, email FROM slots WHERE status = 'booked' AND date >= ? ORDER BY date, time").all(getLocalDateKey())
+    .filter((row) => canonicalEmail(row.email) === key)
+    .map(({ matric_no: matricNo, email: _email, ...rest }) => ({ ...rest, matricNo }))
+  res.json({ bookings })
+})
+
+app.post('/api/bookings/mine/cancel', lookupRateLimit, async (req, res) => {
+  const check = checkVerifiedStudent(req.body?.email, req.body?.otp)
+  if (check.error) return res.status(check.status).json({ error: check.error })
+
+  const slotId = req.body?.slotId
+  if (typeof slotId !== 'string' || !slotId || slotId.length > 64) {
+    return res.status(400).json({ error: 'Choose an appointment to cancel.' })
+  }
+
+  const slot = db.prepare("SELECT * FROM slots WHERE id = ? AND status = 'booked'").get(slotId)
+  if (!slot || canonicalEmail(slot.email) !== canonicalEmail(check.email)) {
+    return res.status(404).json({ error: 'That appointment could not be found.' })
+  }
+
+  const result = db.prepare("UPDATE slots SET status = 'available', student = NULL, email = NULL, matric_no = NULL, level = NULL, department = NULL, topic = NULL, attendance = NULL WHERE id = ? AND status = 'booked'").run(slotId)
+  if (!result.changes) return res.status(404).json({ error: 'That appointment could not be found.' })
+
+  try {
+    await sendStudentCancellationEmail({ student: slot.student, email: slot.email, matricNo: slot.matric_no, date: slot.date, time: slot.time })
+  } catch (error) {
+    console.error('Cancellation notice failed:', error)
+  }
+
+  const waitlistEntry = db.prepare('SELECT * FROM waitlist WHERE date = ? AND status = ? ORDER BY created_at ASC LIMIT 1').get(slot.date, 'waiting')
+  if (waitlistEntry) {
+    db.prepare("UPDATE waitlist SET status = 'notified' WHERE id = ?").run(waitlistEntry.id)
+    try {
+      await sendWaitlistNotificationEmail({ student: waitlistEntry.student, email: waitlistEntry.email, date: waitlistEntry.date, time: slot.time })
+    } catch (error) {
+      console.error('Waitlist notification failed:', error)
+    }
+  }
+
+  res.json({ success: true, message: 'Your appointment has been cancelled.' })
+})
+
+app.get('/api/bookings/all', requireLecturer, (_req, res) => {
+  const rows = db.prepare("SELECT * FROM slots WHERE status = 'booked' ORDER BY date DESC, time DESC LIMIT 5000").all()
+  res.json(rows)
+})
+app.post('/api/bookings/:id/attendance', requireLecturer, (req, res) => {
+  const status = req.body?.status
+  if (!['attended', 'no_show', 'clear'].includes(status)) {
+    return res.status(400).json({ error: 'Choose attended, no-show, or clear.' })
+  }
+
+  const slot = db.prepare("SELECT * FROM slots WHERE id = ? AND status = 'booked'").get(req.params.id)
+  if (!slot) return res.status(404).json({ error: 'Booking not found.' })
+  if (slot.date > getLocalDateKey()) {
+    return res.status(400).json({ error: 'Attendance can only be marked on or after the appointment day.' })
+  }
+
+  db.prepare('UPDATE slots SET attendance = ? WHERE id = ?').run(status === 'clear' ? null : status, slot.id)
+  res.json(db.prepare('SELECT * FROM slots WHERE id = ?').get(slot.id))
+})
 app.delete('/api/bookings/:id', requireLecturer, async (req, res) => {
   const cancelledSlot = db.prepare("SELECT * FROM slots WHERE id = ? AND status = 'booked'").get(req.params.id)
   if (!cancelledSlot) return res.status(404).json({ error: 'Booking not found.' })
 
-  const result = db.prepare("UPDATE slots SET status = 'available', student = NULL, email = NULL, matric_no = NULL, level = NULL, department = NULL, topic = NULL WHERE id = ? AND status = 'booked'").run(req.params.id)
+  const result = db.prepare("UPDATE slots SET status = 'available', student = NULL, email = NULL, matric_no = NULL, level = NULL, department = NULL, topic = NULL, attendance = NULL WHERE id = ? AND status = 'booked'").run(req.params.id)
   if (!result.changes) return res.status(404).json({ error: 'Booking not found.' })
 
   const waitlistEntry = db.prepare('SELECT * FROM waitlist WHERE date = ? AND status = ? ORDER BY created_at ASC LIMIT 1').get(cancelledSlot.date, 'waiting')

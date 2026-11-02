@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Office Hours appointment logo">
+  <rect width="512" height="512" rx="120" fill="#000"/>
+  <rect x="116" y="148" width="280" height="256" rx="40" fill="#fff"/>
+  <rect x="116" y="148" width="280" height="72" rx="40" fill="#fff"/>
+  <path d="M116 222h280" stroke="#000" stroke-width="12"/>
+  <rect x="178" y="104" width="32" height="84" rx="16" fill="#fff" stroke="#000" stroke-width="14"/>
+  <rect x="302" y="104" width="32" height="84" rx="16" fill="#fff" stroke="#000" stroke-width="14"/>
+  <path d="M190 320l50 48 86-104" fill="none" stroke="#000" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

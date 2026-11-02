@@ -341,7 +341,7 @@ test('lecturer receives a clear conflict when adding the same date and time twic
   assert.match(duplicateSlot.body.error, /available/i)
 })
 
-test('a student can book only once per day but may book on another day', async () => {
+test('a student can hold only one upcoming booking at a time', async () => {
   const token = await getLecturerToken()
   const email = 'booked.student@example.com'
   const date = new Date()
@@ -453,4 +453,78 @@ test('a student can book only once per day but may book on another day', async (
   })
 
   assert.equal(differentDayBookingResponse.status, 409)
+})
+
+test('a verified student can see and cancel their own appointment, and nobody else can', async () => {
+  const token = await getLecturerToken()
+  const email = 'mine.student@example.com'
+  const date = new Date()
+  date.setDate(date.getDate() + 9)
+  const bookingDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+
+  await request.post('/api/email/otp/request').send({ email })
+  const otp = getOtpFromEmail(email)
+  assert.equal((await request.post('/api/email/otp/verify').send({ email, otp })).status, 200)
+
+  const slot = await request.post('/api/slots').set('Authorization', `Bearer ${token}`).send({ date: bookingDate, time: '09:00', duration: 30 })
+  assert.equal(slot.status, 201)
+
+  const booked = await request.post('/api/bookings').send({
+    slotId: slot.body.id, student: 'Mine Student', email, matricNo: '2024/777', level: '300 level', department: 'Computer Science', otp, topic: 'Project help',
+  })
+  assert.equal(booked.status, 201)
+
+  await request.post('/api/email/otp/request').send({ email })
+  const otp2 = getOtpFromEmail(email)
+  assert.equal((await request.post('/api/email/otp/verify').send({ email, otp: otp2 })).status, 200)
+
+  const mine = await request.post('/api/bookings/mine').send({ email, otp: otp2 })
+  assert.equal(mine.status, 200)
+  assert.equal(mine.body.bookings.length, 1)
+  assert.equal(mine.body.bookings[0].id, slot.body.id)
+
+  const unverified = await request.post('/api/bookings/mine').send({ email: 'someone.else@example.com', otp: '123456' })
+  assert.equal(unverified.status, 401)
+
+  const wrongOtp = await request.post('/api/bookings/mine/cancel').send({ email, otp: '000000', slotId: slot.body.id })
+  assert.equal(wrongOtp.status, 401)
+
+  const cancelled = await request.post('/api/bookings/mine/cancel').send({ email, otp: otp2, slotId: slot.body.id })
+  assert.equal(cancelled.status, 200)
+
+  const after = await request.post('/api/bookings/mine').send({ email, otp: otp2 })
+  assert.equal(after.body.bookings.length, 0)
+})
+
+test('lecturer can mark attendance only on or after the appointment day', async () => {
+  const token = await getLecturerToken()
+  const email = 'attend.student@example.com'
+  const pad = (n) => String(n).padStart(2, '0')
+  const toKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  const future = new Date()
+  future.setDate(future.getDate() + 12)
+
+  await request.post('/api/email/otp/request').send({ email })
+  const otp = getOtpFromEmail(email)
+  assert.equal((await request.post('/api/email/otp/verify').send({ email, otp })).status, 200)
+
+  const slot = await request.post('/api/slots').set('Authorization', `Bearer ${token}`).send({ date: toKey(future), time: '14:00', duration: 30 })
+  assert.equal(slot.status, 201)
+  const booked = await request.post('/api/bookings').send({
+    slotId: slot.body.id, student: 'Attend Student', email, matricNo: '2024/888', level: '300 level', department: 'Computer Science', otp, topic: 'Attendance check',
+  })
+  assert.equal(booked.status, 201)
+
+  const early = await request.post(`/api/bookings/${slot.body.id}/attendance`).set('Authorization', `Bearer ${token}`).send({ status: 'attended' })
+  assert.equal(early.status, 400)
+
+  const invalid = await request.post(`/api/bookings/${slot.body.id}/attendance`).set('Authorization', `Bearer ${token}`).send({ status: 'maybe' })
+  assert.equal(invalid.status, 400)
+
+  const noAuth = await request.post(`/api/bookings/${slot.body.id}/attendance`).send({ status: 'attended' })
+  assert.equal(noAuth.status, 401)
+
+  const all = await request.get('/api/bookings/all').set('Authorization', `Bearer ${token}`)
+  assert.equal(all.status, 200)
+  assert.ok(all.body.some((row) => row.id === slot.body.id))
 })
