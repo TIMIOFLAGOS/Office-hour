@@ -262,6 +262,7 @@ export class ErrorBoundary extends Component {
     return (
       <main className="page-shell center-page">
         <section className="panel simple-panel status-card" role="alert">
+          <img className="standalone-logo" src={logo} alt="Office Hours appointment booking" width="48" height="48" />
           <div className="status-code">500</div>
           <div className="eyebrow">Something went wrong</div>
           <h1>We couldn’t load this page.</h1>
@@ -278,6 +279,7 @@ function StatusPage({ code, navigate }) {
   return (
     <main className="page-shell center-page">
       <section className="panel simple-panel status-card" role="status">
+        <img className="standalone-logo" src={logo} alt="Office Hours appointment booking" width="48" height="48" />
         <div className="status-code">{isNotFound ? '404' : '500'}</div>
         <div className="eyebrow">{isNotFound ? 'Page not found' : 'Something went wrong'}</div>
         <h1>{isNotFound ? 'This page took a wrong turn.' : 'We couldn’t load this page.'}</h1>
@@ -293,6 +295,7 @@ function PolicyPage({ type, navigate }) {
   return (
     <main className="page-shell center-page policy-page">
       <article className="panel simple-panel policy-card">
+        <img className="standalone-logo" src={logo} alt="Office Hours appointment booking" width="48" height="48" />
         <div className="eyebrow">Appointment booking service</div>
         <h1>{isPrivacy ? 'Privacy policy' : 'Terms of use'}</h1>
         <p className="policy-updated">Last updated: October 9, 2026</p>
@@ -1076,6 +1079,7 @@ function LecturerAccess({ onAuthenticated, navigate }) {
   return (
     <div className="page-shell center-page">
       <div className="panel simple-panel">
+        <img className="standalone-logo" src={logo} alt="Office Hours appointment booking" width="48" height="48" />
         <div className="eyebrow">{eyebrow}</div>
         <h1>{heading}</h1>
 

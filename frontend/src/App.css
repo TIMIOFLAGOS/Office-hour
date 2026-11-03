@@ -1298,6 +1298,14 @@ select:user-invalid {
   border-radius: 12px;
 }
 
+.standalone-logo {
+  display: block;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 8px;
+  border-radius: 15px;
+}
+
 /* ---------- Progress steps ---------- */
 .steps {
   display: flex;
