@@ -1,16 +1,17 @@
 import test from 'node:test'
 import { after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import net from 'node:net'
-import os from 'node:os'
-import path from 'node:path'
 import supertest from 'supertest'
-import Database from 'better-sqlite3'
+import { MongoMemoryReplSet } from 'mongodb-memory-server'
 
-process.env.APPOINTMENTS_DB_PATH = ':memory:'
 process.env.NODE_ENV = 'test'
 process.env.LECTURER_EMAIL = 'lecturer@example.edu'
+const externalTestUri = process.env.MONGODB_TEST_URI
+const mongoServer = externalTestUri ? null : await MongoMemoryReplSet.create({ replSet: { count: 1 } })
+process.env.MONGODB_URI = externalTestUri || mongoServer.getUri()
+process.env.MONGODB_DB_NAME = `appointment_booking_test_${randomUUID().replace(/-/g, '')}`
 const sentEmails = []
 let smtpServer
 let authLoginStep = 0
@@ -82,30 +83,18 @@ process.env.SMTP_PORT = String(smtpServer.address().port)
 process.env.SMTP_USER = 'test-user'
 process.env.SMTP_PASS = 'test-password'
 
-const { app } = await import('../src/index.js')
+const { app, mongoClient, mongoDatabase } = await import('../src/index.js')
 const request = supertest(app)
-after(() => new Promise((resolve) => smtpServer.close(resolve)))
+after(async () => {
+  if (externalTestUri) await mongoDatabase.dropDatabase()
+  await mongoClient.close()
+  await mongoServer?.stop()
+  await new Promise((resolve) => smtpServer.close(resolve))
+})
 
-test('database backup can be restored and queried', async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'appointment-restore-'))
-  const sourcePath = path.join(directory, 'source.db')
-  const backupPath = path.join(directory, 'backup.db')
-  const source = new Database(sourcePath)
-  source.exec('CREATE TABLE restore_check (value TEXT NOT NULL); INSERT INTO restore_check VALUES (\'restored successfully\');')
-
-  try {
-    await source.backup(backupPath)
-  } finally {
-    source.close()
-  }
-
-  const restored = new Database(backupPath, { readonly: true, fileMustExist: true })
-  try {
-    assert.equal(restored.prepare('SELECT value FROM restore_check').get().value, 'restored successfully')
-  } finally {
-    restored.close()
-    await rm(directory, { recursive: true, force: true })
-  }
+test('MongoDB initializes the unique slot-time index', async () => {
+  const indexes = await mongoDatabase.collection('slots').indexes()
+  assert.ok(indexes.some((index) => index.name === 'unique_slot_time' && index.unique))
 })
 
 const getOtpFromEmail = (email) => {
